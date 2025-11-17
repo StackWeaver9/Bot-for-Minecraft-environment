@@ -45,6 +45,6 @@ The Minecraft environment is very heavy and the game  easily runs out of memory 
 
 <p align="center"><img src="https://worldmodels.github.io/assets/conv_vae_label.svg" width="350" height="600"></p>
 
-Here is the result of the VAE with the original image and the reconstructed image and text:
+Here is the result of the VAE with the original image and the reconstructed image:
 
 <p align="center"><img src="https://github.com/avillemin/Minecraft-AI/blob/master/World-Model/figures/VAE.png"></p>
