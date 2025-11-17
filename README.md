@@ -2,10 +2,11 @@
 
 The goal of this project is to apply reseach papers on a Minecraft bot to resolve different tasks.
 
-1. [Q-Learning](#Ql)   
-2. [Deep Q-Learning](#DQl)  
-3. [Double Deep Q-Learning with Prioritized Experience Replay](#DDQl)   
-4. [World Model](#wm) 
+- [Minecraft-AI](#minecraft-ai)
+- [Q-Learning](#q-learning)
+- [Deep Q-Learning](#deep-q-learning)
+- [Double Deep Q-Learning with Prioritized Experience Replay](#double-deep-q-learning-with-prioritized-experience-replay)
+- [World Model](#world-model)
 
 ```bash
 >> cd C:\Users\avillemin\Pictures\Malmo-0.36.0-Windows-64bit_withBoost_Python3.6\Minecraft
@@ -40,10 +41,10 @@ With Prioritized Experience Replay, the network is focusing more on the final po
 
 <p align="center"><img src="https://github.com/avillemin/Minecraft-AI/blob/master/World-Model/figures/world%20model%20network.jpg"></p>
 
-The Minecraft environment is very heavy and the game easily runs out of memory with a long training. My approach to deal with this issue is to create a World Model. By creating a neural network able to dream and play Minecraft without the environment, we can easily improve the learning and parallelize the process. First, let's create a variational autoencoder able to encode our input images into a smaller vector:
+The Minecraft environment is very heavy and the game  easily runs out of memory with a long training. My approach to deal with this issue is to create a World Model. By creating a neural network able to dream and play Minecraft without the environment, we can easily improve the learning and parallelize the process. First, let's create a variational autoencoder  able to encode our input images into a smaller vector:
 
 <p align="center"><img src="https://worldmodels.github.io/assets/conv_vae_label.svg" width="350" height="600"></p>
 
-Here is the result of the VAE with the original image and the reconstructed image:
+Here is the result of the VAE with the original image and the reconstructed image and text:
 
 <p align="center"><img src="https://github.com/avillemin/Minecraft-AI/blob/master/World-Model/figures/VAE.png"></p>
