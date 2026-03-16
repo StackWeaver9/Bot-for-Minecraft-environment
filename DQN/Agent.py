@@ -1,164 +1,215 @@
-import numpy as np
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.autograd import Variable
-import torch.optim as optim
-import torch
-
 import random
+from collections import deque, namedtuple
 
-from collections import namedtuple
-Transition = namedtuple('Transition',
-                        ('state','next_state','action','current_r','done'))
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
 
-class RandomAgent():
-    def __init__(self, hps):
-        self.actions = hps.actions
-        self.nb_actions = hps.nb_actions
-        self.memory = Memory(hps.memory_capacity)
-        
-    def select_action(self,state,epoch,first_action=False):
-        if first_action:
-            acts = self.actions + ['movewest 1']*3
-            action = np.random.randint(len(acts))
-            return action if action < self.nb_actions else 2        
-        else:
-            acts = self.actions + ['movesouth 1']*3
-            action = np.random.randint(len(acts))
-            return action if action < self.nb_actions else 1
-        
-    def observe(self,sample): # in (s, a, r, s_) format
-        obs = sample[0]
-        acts = sample[1]
-        rewards = sample[2]
-        next_obs = sample[3]
-                    
-        for step in range(obs.size(0)):
-            self.memory.add(obs[step], next_obs[step], acts[step], rewards[step], abs(rewards[step])<0.5)   
-                
-    def replay(self):
-        pass
-    
-class DQN_Agent():
-    def __init__(self,hps):
-        self.cuda = torch.cuda.is_available()
-        self.device = torch.device("cuda" if self.cuda else "cpu")
-        print("DDQNPER_Agent running on GPU" if self.cuda else "DDQNPER_Agent running on CPU")
-        self.model = Brain(hps.height, hps.width, hps.nb_actions).to(self.device)
-        self.gamma = hps.gamma
-        self.optimizer = optim.Adam(self.model.parameters(), lr = hps.learning_rate)
-        self.nb_actions = hps.nb_actions
-        self.memory = Memory(hps.memory_capacity)
-        self.hps = hps
-        self.steps = 0
-        self.epsilon = hps.max_epsilon
-        self.losses = []
-        
-    def predict(self, batch, target=False):
-        return self.target_model(batch.to(self.device)) if target else self.model(batch.to(self.device))
-        
-    def select_action(self,state,epoch,first_action):
-        Qvalues = self.model(torch.Tensor(state).to(self.device)).detach()
-        action = np.argmax(Qvalues)
-        if np.random.rand(1) < self.epsilon:
-            action = random.randint(0,self.nb_actions-1)
-        return np.array(action)
-    
-    def learn(self, batch_state, batch_next_state,batch_action,batch_reward,batch_not_done):
-        output = self.model(batch_state.to(self.device)).gather(1, batch_action.to(self.device))
-        next_output = self.model(batch_next_state.to(self.device)).max(1)[0].detach()
-        target = batch_reward.to(self.device) + torch.mul(next_output.unsqueeze(-1)*batch_not_done.to(self.device),self.gamma)
-        td_loss = self.huber_loss(output, target)
-        
-        self.optimizer.zero_grad()
-        td_loss.backward()
-        self.optimizer.step()
-        self.losses+=[td_loss]              
-    
-    def replay(self):
-        batch_img,batch_next_img,batch_action,batch_current_r,batch_not_done = self.memory.sample(self.hps.batch_size)   
-        batch_img = torch.cat(batch_img)
-        batch_next_img = torch.cat(batch_next_img)
-        batch_action = torch.cat(batch_action)
-        batch_current_r = torch.cat(batch_current_r)
-        batch_not_done = torch.cat(batch_not_done)         
-        self.learn(batch_img, batch_next_img,batch_action,batch_current_r,batch_not_done)
-        
-    def observe(self, sample):  # in (s, a, r, s_) format      sample = (batch_img[:-1], batch_action[:-1], batch_rewards, batch_img[1:])
-        obs = sample[0]
-        acts = sample[1]
-        rewards = sample[2]
-        next_obs = sample[3]
-                    
-        for step in range(obs.size(0)):
-            self.memory.add(obs[step], next_obs[step], acts[step], rewards[step], abs(rewards[step])<0.5)       
-            
-        # slowly decrease Epsilon based on our eperience
-        self.steps += 1
-        self.epsilon = self.hps.min_epsilon + (self.hps.max_epsilon - self.hps.min_epsilon) * np.exp(-self.hps.decreasing_rate * self.steps)
-            
-    def huber_loss(self, y_true, y_pred):
-        err = torch.tensor(y_true,dtype=torch.float32).to(self.device) - y_pred
-    
-        cond = abs(err) < self.hps.huber_loss_delta
-        L2 = 0.5 * err**2
-        L1 = self.hps.huber_loss_delta * (abs(err) - 0.5 * self.hps.huber_loss_delta)
-    
-        loss = torch.where(cond, L2, L1)   # Keras does not cover where function in tensorflow :-(
-    
-        return loss.mean()
-    
-    def save(self,path=None):
-        path = './models/DQN' if path==None else path
-        torch.save(self.optimizer.state_dict(),path+'_optimizer.pt')
-        torch.save(self.model.state_dict(),path+'_weights.pt')
-        print('DDQNPER Model and Optimizer saved')
-        
-    def load(self,path=None):
-        path = './models/DQN' if path==None else path
-        self.model.load_state_dict(torch.load(path+'_weights.pt', map_location=self.device))
-        self.optimizer.load_state_dict(torch.load(path+'_optimizer.pt', map_location=self.device))
-        self.model.eval()
-        print('DDQNPER Model and Optimizer loaded')
-    
-class Brain(nn.Module):
-    def __init__(self,height,width,nb_outputs):
-        super(Brain,self).__init__()
-        self.convolution1 = nn.Conv2d(in_channels = 3, out_channels = 32, kernel_size = 5)
-        self.convolution2 = nn.Conv2d(in_channels = 32, out_channels = 64, kernel_size = 5)
-        self.convolution3 = nn.Conv2d(in_channels = 64, out_channels = 128, kernel_size = 3)
-        self.fc1 = nn.Linear(in_features = self.count_neurons((3, height, width)), out_features = 512)
-        self.fc2 = nn.Linear(in_features = 512, out_features = nb_outputs)
-              
-    def count_neurons(self, image_dim):
-        x = Variable(torch.rand(1, *image_dim))
-        x = F.relu(F.max_pool2d(self.convolution1(x), 3, 2))
-        x = F.relu(F.max_pool2d(self.convolution2(x), 3, 2))
-        x = F.relu(F.max_pool2d(self.convolution3(x), 3, 2))
-        return x.data.view(1, -1).size(1)
-    
-    def forward(self,x):
-        x = F.relu(F.max_pool2d(self.convolution1(x), 3, 2))
-        x = F.relu(F.max_pool2d(self.convolution2(x), 3, 2))
-        x = F.relu(F.max_pool2d(self.convolution3(x), 3, 2))
-        x = x.contiguous().view(x.size(0), -1)
-        x = F.relu(self.fc1(x))
-        x = self.fc2(x)
-        return x
-    
-class Memory():
-    def __init__(self, capacity):
-        self.capacity = capacity
-        self.memory = []
 
-    def add(self,current_img, next_img, action, reward, not_done):
-        self.memory.append(Transition(current_img.unsqueeze(0), next_img.unsqueeze(0), torch.tensor(action,dtype=torch.long).view(1,1), torch.tensor(reward).view(1,1), torch.tensor(not_done,dtype = torch.float).view(1,1)))
-        while len(self.memory) > self.capacity:
-            del self.memory[0]
+# =========================================================
+# Replay Memory
+# =========================================================
+
+Transition = namedtuple(
+    "Transition",
+    ("state", "action", "reward", "next_state", "done"),
+)
+
+
+class ReplayMemory:
+    def __init__(self, capacity: int):
+        self.memory = deque(maxlen=capacity)
+
+    def add(self, state, action, reward, next_state, done):
+        self.memory.append(
+            Transition(state, action, reward, next_state, done)
+        )
 
     def sample(self, batch_size):
-        if len(self.memory)>batch_size:
-            samples = random.sample(self.memory,batch_size)
-        else:
-            samples = random.sample(self.memory,len(self.memory))
-        return Transition(*zip(*samples))  
+        batch = random.sample(self.memory, batch_size)
+        return Transition(*zip(*batch))
+
+    def __len__(self):
+        return len(self.memory)
+
+
+# =========================================================
+# CNN Q-Network
+# =========================================================
+
+class Brain(nn.Module):
+    def __init__(self, height, width, nb_actions):
+        super().__init__()
+
+        self.conv = nn.Sequential(
+            nn.Conv2d(3, 32, 5),
+            nn.ReLU(),
+            nn.MaxPool2d(3, 2),
+
+            nn.Conv2d(32, 64, 5),
+            nn.ReLU(),
+            nn.MaxPool2d(3, 2),
+
+            nn.Conv2d(64, 128, 3),
+            nn.ReLU(),
+            nn.MaxPool2d(3, 2),
+        )
+
+        # Compute conv output size dynamically
+        with torch.no_grad():
+            dummy = torch.zeros(1, 3, height, width)
+            conv_out = self.conv(dummy).view(1, -1).size(1)
+
+        self.fc = nn.Sequential(
+            nn.Linear(conv_out, 512),
+            nn.ReLU(),
+            nn.Linear(512, nb_actions),
+        )
+
+    def forward(self, x):
+        x = self.conv(x)
+        x = x.view(x.size(0), -1)
+        return self.fc(x)
+
+
+# =========================================================
+# DQN Agent
+# =========================================================
+
+class DQNAgent:
+    def __init__(self, hps):
+
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )
+        print(f"Running on {self.device}")
+
+        # Networks
+        self.policy_net = Brain(
+            hps.height, hps.width, hps.nb_actions
+        ).to(self.device)
+
+        self.target_net = Brain(
+            hps.height, hps.width, hps.nb_actions
+        ).to(self.device)
+
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+        self.target_net.eval()
+
+        # Training
+        self.optimizer = optim.Adam(
+            self.policy_net.parameters(),
+            lr=hps.learning_rate,
+        )
+
+        self.memory = ReplayMemory(hps.memory_capacity)
+
+        self.gamma = hps.gamma
+        self.batch_size = hps.batch_size
+
+        # Epsilon-greedy
+        self.epsilon = hps.max_epsilon
+        self.epsilon_min = hps.min_epsilon
+        self.epsilon_decay = hps.decreasing_rate
+
+        self.nb_actions = hps.nb_actions
+        self.steps = 0
+
+        self.loss_fn = nn.SmoothL1Loss()
+
+    # -----------------------------------------------------
+
+    def select_action(self, state):
+
+        if random.random() < self.epsilon:
+            return random.randrange(self.nb_actions)
+
+        state = (
+            torch.tensor(state, dtype=torch.float32)
+            .unsqueeze(0)
+            .to(self.device)
+        )
+
+        with torch.no_grad():
+            q_values = self.policy_net(state)
+
+        return int(q_values.argmax().item())
+
+    # -----------------------------------------------------
+
+    def store(self, s, a, r, s_next, done):
+        self.memory.add(s, a, r, s_next, done)
+
+    # -----------------------------------------------------
+
+    def train_step(self):
+
+        if len(self.memory) < self.batch_size:
+            return None
+
+        transitions = self.memory.sample(self.batch_size)
+        batch = Transition(*transitions)
+
+        state = torch.tensor(
+            np.array(batch.state), dtype=torch.float32
+        ).to(self.device)
+
+        action = torch.tensor(batch.action).unsqueeze(1).to(self.device)
+        reward = torch.tensor(batch.reward).to(self.device)
+
+        next_state = torch.tensor(
+            np.array(batch.next_state), dtype=torch.float32
+        ).to(self.device)
+
+        done = torch.tensor(batch.done, dtype=torch.float32).to(self.device)
+
+        # Q(s,a)
+        q_values = self.policy_net(state).gather(1, action).squeeze()
+
+        # max Q'(s')
+        with torch.no_grad():
+            next_q = self.target_net(next_state).max(1)[0]
+
+        target = reward + (1 - done) * self.gamma * next_q
+
+        loss = self.loss_fn(q_values, target)
+
+        self.optimizer.zero_grad()
+        loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(
+            self.policy_net.parameters(), 1.0
+        )
+
+        self.optimizer.step()
+
+        # Epsilon decay
+        self.epsilon = max(
+            self.epsilon_min,
+            self.epsilon * self.epsilon_decay,
+        )
+
+        self.steps += 1
+
+        return loss.item()
+
+    # -----------------------------------------------------
+
+    def update_target(self):
+        """Hard update target network"""
+        self.target_net.load_state_dict(
+            self.policy_net.state_dict()
+        )
+
+    # -----------------------------------------------------
+
+    def save(self, path="dqn_model.pt"):
+        torch.save(self.policy_net.state_dict(), path)
+
+    def load(self, path="dqn_model.pt"):
+        self.policy_net.load_state_dict(
+            torch.load(path, map_location=self.device)
+        )
+        self.update_target()
